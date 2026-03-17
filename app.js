@@ -574,12 +574,14 @@ function drawDecodedImage(imgObj){
   tmp.width = imgObj.width;
   tmp.height = imgObj.height;
   tmp.getContext('2d').putImageData(new ImageData(imgObj.data, imgObj.width, imgObj.height), 0, 0);
-  const scale = Math.max(4, Math.floor(400 / Math.max(1, imgObj.width)));
-  canvas.width = imgObj.width * scale;
-  canvas.height = imgObj.height * scale;
+  const displayW = 480;
+  const displayH = Math.max(1, Math.round(displayW * imgObj.height / imgObj.width));
+  canvas.width = displayW;
+  canvas.height = displayH;
   const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(tmp, 0, 0, displayW, displayH);
 }
 
 function drawLiveImage(imgObj){
