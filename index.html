@@ -20,7 +20,7 @@
         <h2>Encoder</h2>
         <label>Image to send (PNG/JPEG): <input id="imgFile" type="file" accept="image/*"></label>
   <label>Mode: <select id="modeSelect"><option>Scottie S1 (simulated)</option><option>Robot 36 (simulated)</option><option>Martin M1 (simulated)</option></select></label>
-        <label>Color mode: <select id="colorMode"><option value="grayscale">Grayscale</option><option value="rgb">RGB</option></select></label>
+        <label>Color mode: RGB (fixed)</label>
   <label>Playback sample rate: <input id="sampleRate" type="number" value="44100"></label>
   <label>Encode duration (seconds): <input id="encodeDuration" type="number" value="10" min="1" step="1"></label>
         <label>Volume: <input id="volumeControl" type="range" min="0" max="1" step="0.01" value="1"></label>
@@ -50,7 +50,7 @@
         <h2>Decoder</h2>
         <label>Upload SSTV audio (WAV/MP3): <input id="audioFile" type="file" accept="audio/*"></label>
   <label>Decode duration (seconds): <input id="decodeDuration" type="number" value="10" min="1" step="1"></label>
-        <label>Decode color mode: <select id="decodeColorMode"><option value="auto">Auto</option><option value="rgb">Force RGB</option><option value="grayscale">Force Grayscale</option></select></label>
+        <label>Decode color mode: RGB (fixed)</label>
   <label>Resolution (width px): <input id="resolutionSlider" type="range" min="32" max="512" value="320"></label>
   <label>Detector: <select id="detectorSelect"><option value="goertzel">Goertzel (default)</option><option value="fft">FFT (fft.js)</option></select></label>
   <label><input id="useDPR" type="checkbox"> Scale canvases by devicePixelRatio (high-DPI)</label>
