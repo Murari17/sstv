@@ -241,6 +241,13 @@ function detectDominantFrequency(frame, sampleRate, fStart, fEnd, step=5){
   return bestFreq;
 }
 
+function setDecodeDebug(lines){
+  const el = document.getElementById('decodeDebug');
+  if(!el) return;
+  const out = Array.isArray(lines) ? lines.join('\n') : String(lines);
+  el.textContent = out;
+}
+
 // Improved decoder with sync/VIS detection, auto RGB detection and resolution control
 async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const array = await blob.arrayBuffer();
@@ -256,6 +263,13 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const metaBaseFreq = 2600;
   const metaStart = leaderSamples + visSamples + modeMarkerSamples;
   if(metaStart + metaToneSamples*3 >= chan.length){
+    setDecodeDebug([
+      'Decoder debug: metadata header missing',
+      `sampleRate=${sampleRate}`,
+      `metaStart=${metaStart}`,
+      `audioSamples=${chan.length}`,
+      'path=fallback'
+    ]);
     return simpleDecodeFallback(chan, sampleRate, cols, rows, options);
   }
 
@@ -293,6 +307,26 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
       imgData[idx]=r; imgData[idx+1]=g; imgData[idx+2]=b; imgData[idx+3]=255;
     }
   }
+
+  const preview = [];
+  const previewCount = Math.min(8, outCols * outRows);
+  for(let i=0;i<previewCount;i++){
+    const p = i*4;
+    preview.push(`(${imgData[p]},${imgData[p+1]},${imgData[p+2]})`);
+  }
+  setDecodeDebug([
+    'Decoder debug: metadata decode',
+    `sampleRate=${sampleRate}`,
+    `encodedCols=${encodedCols}`,
+    `encodedRows=${encodedRows}`,
+    `samplesPerTone=${samplesPerTone}`,
+    `headerOffsetSamples=${headerOffsetSamples}`,
+    `outCols=${outCols}`,
+    `outRows=${outRows}`,
+    `totalPerLine=${totalPerLine}`,
+    `firstPixels=${preview.join(' ')}`
+  ]);
+
   return {width:outCols, height:outRows, data:imgData};
 }
 
@@ -326,6 +360,23 @@ function simpleDecodeFallback(chan, sampleRate, outCols, outRows, options){
       }
     }
   }
+  const preview = [];
+  const previewCount = Math.min(8, outCols * outputRows);
+  for(let i=0;i<previewCount;i++){
+    const p = i*4;
+    preview.push(`(${imgData[p]},${imgData[p+1]},${imgData[p+2]})`);
+  }
+  setDecodeDebug([
+    'Decoder debug: fallback decode',
+    `sampleRate=${sampleRate}`,
+    `encodedCols=${encodedCols}`,
+    `encodedRows=${encodedRows}`,
+    `samplesPerTone=${samplesPerTone}`,
+    `headerOffsetSamples=${headerOffsetSamples}`,
+    `outCols=${outCols}`,
+    `outRows=${outputRows}`,
+    `firstPixels=${preview.join(' ')}`
+  ]);
   return {width:outCols, height:outRows, data:imgData};
 }
 
