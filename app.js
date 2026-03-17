@@ -181,33 +181,54 @@ function playFloat32Buffer(bufObj){
   return src;
 }
 
-function floatToWav(float32Array, sampleRate){
-  const buffer = new ArrayBuffer(44 + float32Array.length * 2);
+function floatToWav(float32Array, sampleRate, sstvMeta){
+  const dataBytes = float32Array.length * 2;
+  const fmtChunkSize = 16;
+  const sstvChunkSize = 24;
+  const sstvPadded = sstvChunkSize + (sstvChunkSize % 2);
+  const totalSize = 12 + (8 + fmtChunkSize) + (8 + sstvPadded) + (8 + dataBytes);
+  const buffer = new ArrayBuffer(totalSize);
   const view = new DataView(buffer);
-  function writeString(view, offset, string){
-    for(let i=0;i<string.length;i++) view.setUint8(offset+i,string.charCodeAt(i));
+  function writeString(v, offset, str){
+    for(let i=0;i<str.length;i++) v.setUint8(offset+i,str.charCodeAt(i));
   }
-  writeString(view,0,'RIFF');
-  view.setUint32(4,36 + float32Array.length*2,true);
-  writeString(view,8,'WAVE');
-  writeString(view,12,'fmt ');
-  view.setUint32(16,16,true);
-  view.setUint16(20,1,true);
-  view.setUint16(22,1,true);
-  view.setUint32(24,sampleRate,true);
-  view.setUint32(28,sampleRate*2,true);
-  view.setUint16(32,2,true);
-  view.setUint16(34,16,true);
-  writeString(view,36,'data');
-  view.setUint32(40,float32Array.length*2,true);
-  // PCM 16-bit
-  let offset=44;
+
+  let off = 0;
+  writeString(view, off, 'RIFF'); off += 4;
+  view.setUint32(off, totalSize - 8, true); off += 4;
+  writeString(view, off, 'WAVE'); off += 4;
+
+  writeString(view, off, 'fmt '); off += 4;
+  view.setUint32(off, fmtChunkSize, true); off += 4;
+  view.setUint16(off, 1, true); off += 2;
+  view.setUint16(off, 1, true); off += 2;
+  view.setUint32(off, sampleRate, true); off += 4;
+  view.setUint32(off, sampleRate*2, true); off += 4;
+  view.setUint16(off, 2, true); off += 2;
+  view.setUint16(off, 16, true); off += 2;
+
+  const meta = sstvMeta || {};
+  writeString(view, off, 'sstv'); off += 4;
+  view.setUint32(off, sstvChunkSize, true); off += 4;
+  view.setUint16(off, 1, true); off += 2; // version
+  view.setUint16(off, Math.max(1, meta.cols || 320), true); off += 2;
+  view.setUint16(off, Math.max(1, meta.rows || 256), true); off += 2;
+  view.setUint16(off, Math.max(1, meta.toneMultiplier || 3), true); off += 2;
+  view.setUint32(off, Math.max(1, meta.samplePerTone || 1), true); off += 4;
+  view.setUint32(off, Math.max(0, meta.headerOffset || 0), true); off += 4;
+  const syncPerLine = Math.floor(sampleRate * 0.005);
+  view.setUint32(off, Math.max(1, syncPerLine), true); off += 4;
+  view.setUint32(off, sampleRate, true); off += 4;
+  if(sstvChunkSize % 2 === 1){ view.setUint8(off, 0); off += 1; }
+
+  writeString(view, off, 'data'); off += 4;
+  view.setUint32(off, dataBytes, true); off += 4;
   for(let i=0;i<float32Array.length;i++){
-    let s = Math.max(-1,Math.min(1,float32Array[i]));
-    view.setInt16(offset, s<0 ? s*0x8000 : s*0x7FFF, true);
-    offset+=2;
+    let s = Math.max(-1, Math.min(1, float32Array[i]));
+    view.setInt16(off, s < 0 ? s*0x8000 : s*0x7FFF, true);
+    off += 2;
   }
-  return new Blob([view],{type:'audio/wav'});
+  return new Blob([view], {type:'audio/wav'});
 }
 
 // Goertzel-based decoder: detect strong frequency components corresponding to tone range and map to brightness.
@@ -241,6 +262,39 @@ function detectDominantFrequency(frame, sampleRate, fStart, fEnd, step=5){
   return bestFreq;
 }
 
+function parseSstvMetadataFromWav(arrayBuffer){
+  try{
+    const view = new DataView(arrayBuffer);
+    if(view.byteLength < 12) return null;
+    const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+    const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+    if(riff !== 'RIFF' || wave !== 'WAVE') return null;
+    let off = 12;
+    while(off + 8 <= view.byteLength){
+      const id = String.fromCharCode(view.getUint8(off), view.getUint8(off+1), view.getUint8(off+2), view.getUint8(off+3));
+      const size = view.getUint32(off+4, true);
+      const start = off + 8;
+      if(id === 'sstv' && start + size <= view.byteLength && size >= 24){
+        const version = view.getUint16(start, true);
+        if(version !== 1) return null;
+        return {
+          cols: view.getUint16(start + 2, true),
+          rows: view.getUint16(start + 4, true),
+          toneMultiplier: view.getUint16(start + 6, true),
+          samplePerTone: view.getUint32(start + 8, true),
+          headerOffsetSamples: view.getUint32(start + 12, true),
+          syncPerLineSamples: view.getUint32(start + 16, true),
+          encodedSampleRate: view.getUint32(start + 20, true)
+        };
+      }
+      off = start + size + (size % 2);
+    }
+  }catch(e){
+    return null;
+  }
+  return null;
+}
+
 function setDecodeDebug(lines){
   const el = document.getElementById('decodeDebug');
   if(!el) return;
@@ -251,38 +305,53 @@ function setDecodeDebug(lines){
 // Improved decoder with sync/VIS detection, auto RGB detection and resolution control
 async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const array = await blob.arrayBuffer();
+  const wavMeta = parseSstvMetadataFromWav(array);
   ensureAudioCtx();
   const decoded = await audioCtx.decodeAudioData(array.slice(0));
   const chan = decoded.getChannelData(0);
   const sampleRate = decoded.sampleRate;
-  const leaderSamples = Math.floor(sampleRate * 0.3);
-  const visToneSamples = Math.floor(sampleRate * 0.05);
-  const visSamples = visToneSamples * 3;
-  const modeMarkerSamples = Math.floor(sampleRate * 0.06);
-  const metaToneSamples = Math.max(1, Math.floor(sampleRate * 0.03));
-  const metaBaseFreq = 2600;
-  const metaStart = leaderSamples + visSamples + modeMarkerSamples;
-  if(metaStart + metaToneSamples*3 >= chan.length){
-    setDecodeDebug([
-      'Decoder debug: metadata header missing',
-      `sampleRate=${sampleRate}`,
-      `metaStart=${metaStart}`,
-      `audioSamples=${chan.length}`,
-      'path=fallback'
-    ]);
-    return simpleDecodeFallback(chan, sampleRate, cols, rows, options);
+  let encodedCols, encodedRows, samplesPerTone, toneMultiplier, syncPerLineSamples, headerOffsetSamples;
+  let metadataSource = 'wav-chunk';
+
+  if(wavMeta){
+    const srcRate = Math.max(1, wavMeta.encodedSampleRate || sampleRate);
+    const ratio = sampleRate / srcRate;
+    encodedCols = Math.max(16, Math.min(1024, wavMeta.cols || 320));
+    encodedRows = Math.max(16, Math.min(1024, wavMeta.rows || 256));
+    toneMultiplier = Math.max(1, Math.min(4, wavMeta.toneMultiplier || 3));
+    samplesPerTone = Math.max(4, Math.min(4096, Math.round((wavMeta.samplePerTone || 1) * ratio)));
+    headerOffsetSamples = Math.max(0, Math.round((wavMeta.headerOffsetSamples || 0) * ratio));
+    syncPerLineSamples = Math.max(1, Math.round((wavMeta.syncPerLineSamples || Math.floor(srcRate*0.005)) * ratio));
+  } else {
+    metadataSource = 'tone-header';
+    const leaderSamples = Math.floor(sampleRate * 0.3);
+    const visToneSamples = Math.floor(sampleRate * 0.05);
+    const visSamples = visToneSamples * 3;
+    const modeMarkerSamples = Math.floor(sampleRate * 0.06);
+    const metaToneSamples = Math.max(1, Math.floor(sampleRate * 0.03));
+    const metaBaseFreq = 2600;
+    const metaStart = leaderSamples + visSamples + modeMarkerSamples;
+    if(metaStart + metaToneSamples*3 >= chan.length){
+      setDecodeDebug([
+        'Decoder debug: metadata header missing',
+        `sampleRate=${sampleRate}`,
+        `metaStart=${metaStart}`,
+        `audioSamples=${chan.length}`,
+        'path=fallback'
+      ]);
+      return simpleDecodeFallback(chan, sampleRate, cols, rows, options);
+    }
+    const colsFrame = chan.subarray(metaStart, metaStart + metaToneSamples);
+    const rowsFrame = chan.subarray(metaStart + metaToneSamples, metaStart + metaToneSamples*2);
+    const sptFrame = chan.subarray(metaStart + metaToneSamples*2, metaStart + metaToneSamples*3);
+    encodedCols = Math.max(16, Math.min(1024, Math.round(detectDominantFrequency(colsFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
+    encodedRows = Math.max(16, Math.min(1024, Math.round(detectDominantFrequency(rowsFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
+    samplesPerTone = Math.max(4, Math.min(4096, Math.round(detectDominantFrequency(sptFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
+    toneMultiplier = 3;
+    syncPerLineSamples = Math.floor(sampleRate * 0.005);
+    headerOffsetSamples = metaStart + metaToneSamples*3;
   }
 
-  const colsFrame = chan.subarray(metaStart, metaStart + metaToneSamples);
-  const rowsFrame = chan.subarray(metaStart + metaToneSamples, metaStart + metaToneSamples*2);
-  const sptFrame = chan.subarray(metaStart + metaToneSamples*2, metaStart + metaToneSamples*3);
-  const encodedCols = Math.max(16, Math.min(1024, Math.round(detectDominantFrequency(colsFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
-  const encodedRows = Math.max(16, Math.min(1024, Math.round(detectDominantFrequency(rowsFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
-  const samplesPerTone = Math.max(4, Math.min(4096, Math.round(detectDominantFrequency(sptFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
-
-  const toneMultiplier = 3;
-  const syncPerLineSamples = Math.floor(sampleRate * 0.005);
-  const headerOffsetSamples = metaStart + metaToneSamples*3;
   const totalPerLine = syncPerLineSamples + encodedCols * toneMultiplier * samplesPerTone;
   const desiredCols = parseInt(document.getElementById('resolutionSlider')?.value) || encodedCols;
   const outCols = Math.max(16, Math.min(desiredCols, encodedCols));
@@ -316,6 +385,7 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   }
   setDecodeDebug([
     'Decoder debug: metadata decode',
+    `metadataSource=${metadataSource}`,
     `sampleRate=${sampleRate}`,
     `encodedCols=${encodedCols}`,
     `encodedRows=${encodedRows}`,
@@ -696,7 +766,7 @@ document.getElementById('stopBtn').addEventListener('click', ()=>{
 });
 
 document.getElementById('downloadWavBtn').addEventListener('click', ()=>{
-  if(!generatedBuffer) return; const blob = floatToWav(generatedBuffer.buffer, generatedBuffer.sampleRate);
+  if(!generatedBuffer) return; const blob = floatToWav(generatedBuffer.buffer, generatedBuffer.sampleRate, generatedBuffer.meta);
   const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='sstv_emulator.wav'; a.click();
 });
 
