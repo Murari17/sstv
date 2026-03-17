@@ -570,18 +570,12 @@ function detectFrameToGray(frame, sampleRate){
 
 function drawDecodedImage(imgObj){
   const canvas = document.getElementById('decodedCanvas');
-  const tmp = document.createElement('canvas');
-  tmp.width = imgObj.width;
-  tmp.height = imgObj.height;
-  tmp.getContext('2d').putImageData(new ImageData(imgObj.data, imgObj.width, imgObj.height), 0, 0);
-  const displayW = 480;
-  const displayH = Math.max(1, Math.round(displayW * imgObj.height / imgObj.width));
-  canvas.width = displayW;
-  canvas.height = displayH;
-  const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(tmp, 0, 0, displayW, displayH);
+  canvas.width = imgObj.width;
+  canvas.height = imgObj.height;
+  canvas.style.width = '480px';
+  canvas.style.height = Math.round(480 * imgObj.height / imgObj.width) + 'px';
+  canvas.style.imageRendering = 'auto';
+  canvas.getContext('2d').putImageData(new ImageData(imgObj.data, imgObj.width, imgObj.height), 0, 0);
 }
 
 function drawLiveImage(imgObj){
