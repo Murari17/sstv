@@ -85,6 +85,22 @@ function createAudioBufferFromFloat(floatArr, sampleRate){
   return {buffer:floatArr, sampleRate};
 }
 
+function detectHeaderToneMultiplier(chan, sampleRate){
+  // Header layout: 300ms leader + 3*50ms VIS + 60ms mode marker.
+  // Mode marker: 1100Hz = grayscale, 1300Hz = RGB.
+  const markerStart = Math.floor(sampleRate * 0.45);
+  const markerLen = Math.max(32, Math.floor(sampleRate * 0.06));
+  if(markerStart + markerLen >= chan.length) return null;
+  const frame = chan.subarray(markerStart, markerStart + markerLen);
+  const magGray = goertzel(frame, sampleRate, 1100);
+  const magRgb = goertzel(frame, sampleRate, 1300);
+  const maxMag = Math.max(magGray, magRgb);
+  if(maxMag < 1e-3) return null;
+  if(magRgb > magGray * 1.15) return 3;
+  if(magGray > magRgb * 1.15) return 1;
+  return null;
+}
+
 // Implement a simplified Scottie S1-like encoder timing with sync pulses.
 // We'll still use grayscale-to-frequency mapping for pixels, but adjust per-line timing.
 function synthesizeSSTV(samples, sampleRate=44100, options={}){
@@ -120,7 +136,9 @@ function synthesizeSSTV(samples, sampleRate=44100, options={}){
   const leaderSamples = Math.floor(sampleRate*(leaderMs/1000));
   const visTones = [1900, 1200, 1900]; // small pattern
   const visSamples = visTones.length * Math.floor(sampleRate*0.05);
-  const out = new Float32Array(leaderSamples + visSamples + totalSamples);
+  const modeMarkerFreq = toneMultiplier > 1 ? 1300 : 1100;
+  const modeMarkerSamples = Math.floor(sampleRate * 0.06);
+  const out = new Float32Array(leaderSamples + visSamples + modeMarkerSamples + totalSamples);
   let widx = 0;
   // leader
   for(let i=0;i<leaderSamples;i++) out[widx++] = Math.sin(2*Math.PI*1900*(i/sampleRate)) * 0.8;
@@ -129,6 +147,8 @@ function synthesizeSSTV(samples, sampleRate=44100, options={}){
     const vs = Math.floor(sampleRate*0.05);
     for(let i=0;i<vs;i++) out[widx++] = Math.sin(2*Math.PI*vt*(i/sampleRate)) * 0.8;
   }
+  // Mode marker helps decoder determine whether this payload is grayscale or RGB.
+  for(let i=0;i<modeMarkerSamples;i++) out[widx++] = Math.sin(2*Math.PI*modeMarkerFreq*(i/sampleRate)) * 0.8;
   // now write lines
 
   for(let r=0;r<rows;r++){
@@ -162,7 +182,8 @@ function synthesizeSSTV(samples, sampleRate=44100, options={}){
     }
   }
   const meta = { samplePerTone, tonePerPixelMs, toneMultiplier, cols, rows, totalTones: totalTones };
-  meta.headerOffset = leaderSamples + visSamples;
+  meta.colorMode = toneMultiplier > 1 ? 'rgb' : 'grayscale';
+  meta.headerOffset = leaderSamples + visSamples + modeMarkerSamples;
   return { buffer: out, sampleRate, meta };
 }
 
@@ -236,6 +257,7 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const decoded = await audioCtx.decodeAudioData(array.slice(0));
   const chan = decoded.getChannelData(0);
   const sampleRate = decoded.sampleRate;
+  const headerToneMultiplier = detectHeaderToneMultiplier(chan, sampleRate);
 
   // Get desired output width from UI resolution slider if present
   const desiredCols = parseInt(document.getElementById('resolutionSlider')?.value) || cols;
@@ -256,14 +278,14 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   }
   if(peaks.length === 0){
     // fallback to simple decode
-    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, options);
+    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, {...options, toneMultiplier: headerToneMultiplier || options.toneMultiplier || 1});
   }
   // threshold peaks to the largest ones
   const magsOnly = peaks.map(p=>p.mag).slice().sort((a,b)=>a-b);
   const medianMag = magsOnly[Math.floor(magsOnly.length/2)] || 0;
   const strongPeaks = peaks.filter(p=>p.mag > Math.max(1, medianMag*3)).map(p=>p.off).sort((a,b)=>a-b);
   if(strongPeaks.length < 2){
-    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, options);
+    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, {...options, toneMultiplier: headerToneMultiplier || options.toneMultiplier || 1});
   }
   // estimate line spacing (samples between sync pulses)
   const diffs = [];
@@ -288,8 +310,8 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
 
   // compute tones per line and infer toneMultiplier (RGB if ~3x)
   const tonesPerLine = Math.max(1, Math.floor(samplesPerLine / samplesPerTone));
-  let toneMultiplier = 1;
-  if(tonesPerLine / desiredCols > 2.0) toneMultiplier = 3;
+  let toneMultiplier = headerToneMultiplier || 1;
+  if(!headerToneMultiplier && tonesPerLine / desiredCols > 2.0) toneMultiplier = 3;
   // compute output rows using total tones estimate
   const outCols = desiredCols;
   const totalTonesEstimate = Math.floor(chan.length / samplesPerTone);
@@ -329,17 +351,31 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
 function simpleDecodeFallback(chan, sampleRate, outCols, outRows, options){
   const tonePerPixelMs = options.estimatedToneMs || 10;
   const samplesPerTone = Math.max(4, Math.floor(sampleRate * (tonePerPixelMs/1000)));
+  const toneMultiplier = options.toneMultiplier || 1;
   const imgData = new Uint8ClampedArray(outCols*outRows*4);
   let p=0;
   for(let y=0;y<outRows;y++){
     for(let x=0;x<outCols;x++){
-      if(p * samplesPerTone >= chan.length){ var gray=0; }
-      else {
-        const frame = chan.subarray(p*samplesPerTone, p*samplesPerTone + samplesPerTone);
-        const val = detectFrameToGray(frame, sampleRate);
-        var gray = val;
+      const toneBase = p * toneMultiplier;
+      const idx = (y*outCols+x)*4;
+      if(toneBase * samplesPerTone >= chan.length){
+        imgData[idx]=0; imgData[idx+1]=0; imgData[idx+2]=0; imgData[idx+3]=255;
+      } else if(toneMultiplier === 1){
+        const frame = chan.subarray(toneBase*samplesPerTone, toneBase*samplesPerTone + samplesPerTone);
+        const gray = detectFrameToGray(frame, sampleRate);
+        imgData[idx]=imgData[idx+1]=imgData[idx+2]=gray; imgData[idx+3]=255;
+      } else {
+        const vals = [0,0,0];
+        for(let ch=0; ch<toneMultiplier; ch++){
+          const start = (toneBase + ch) * samplesPerTone;
+          if(start + samplesPerTone <= chan.length){
+            const frame = chan.subarray(start, start + samplesPerTone);
+            vals[ch] = detectFrameToGray(frame, sampleRate);
+          }
+        }
+        imgData[idx]=vals[0]||0; imgData[idx+1]=vals[1]||0; imgData[idx+2]=vals[2]||0; imgData[idx+3]=255;
       }
-      const idx = (y*outCols+x)*4; imgData[idx]=imgData[idx+1]=imgData[idx+2]=gray; imgData[idx+3]=255; p++;
+      p++;
     }
   }
   return {width:outCols, height:outRows, data:imgData};
@@ -594,6 +630,7 @@ document.getElementById('encodeBtn').addEventListener('click', async ()=>{
   const img = window._lastImage; if(!img) { alert('Select an image first'); return; }
   const sr = parseInt(document.getElementById('sampleRate').value) || 44100;
   const duration = parseInt(document.getElementById('encodeDuration').value) || 10;
+  const colorMode = document.getElementById('colorMode')?.value || 'grayscale';
   // Determine appropriate resolution so the total pixels fit the duration given tonePerPixelMs
   // We'll assume tonePerPixelMs will be computed inside synthesize; approximate using 10ms base.
   const approxToneMs = Math.max(1, Math.min(200, (duration*1000*0.98) / (320*256)));
@@ -608,7 +645,9 @@ document.getElementById('encodeBtn').addEventListener('click', async ()=>{
   let cols = Math.max(32, Math.round(rows * aspect));
   // clamp to reasonable maxima
   rows = Math.min(256, rows); cols = Math.min(512, cols);
-  const samples = imageToGrayscaleSamples(img, cols, rows);
+  const samples = colorMode === 'rgb'
+    ? imageToRGBSamples(img, cols, rows)
+    : imageToGrayscaleSamples(img, cols, rows);
   const bufObj = synthesizeSSTV(samples, sr, {durationSeconds: duration});
   generatedBuffer = bufObj;
   playingOffsetSeconds = 0; playingPaused = false;
