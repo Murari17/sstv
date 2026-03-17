@@ -12,7 +12,7 @@ let playingSource = null;
 let playingStartTime = 0;
 let playingOffsetSeconds = 0;
 let playingPaused = false;
-const APP_BUILD = '2026-03-17-01';
+const APP_BUILD = '2026-03-17-02';
 
 function ensureAudioCtx(){
   if(!audioCtx){
@@ -296,6 +296,55 @@ function parseSstvMetadataFromWav(arrayBuffer){
   return null;
 }
 
+function parseWavMonoPcm(arrayBuffer){
+  try{
+    const view = new DataView(arrayBuffer);
+    if(view.byteLength < 44) return null;
+    const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+    const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+    if(riff !== 'RIFF' || wave !== 'WAVE') return null;
+
+    let off = 12;
+    let fmt = null;
+    let dataOffset = -1;
+    let dataSize = 0;
+    while(off + 8 <= view.byteLength){
+      const id = String.fromCharCode(view.getUint8(off), view.getUint8(off+1), view.getUint8(off+2), view.getUint8(off+3));
+      const size = view.getUint32(off+4, true);
+      const start = off + 8;
+      if(id === 'fmt ' && start + size <= view.byteLength && size >= 16){
+        fmt = {
+          audioFormat: view.getUint16(start, true),
+          channels: view.getUint16(start + 2, true),
+          sampleRate: view.getUint32(start + 4, true),
+          bitsPerSample: view.getUint16(start + 14, true)
+        };
+      }
+      if(id === 'data' && start + size <= view.byteLength){
+        dataOffset = start;
+        dataSize = size;
+      }
+      off = start + size + (size % 2);
+    }
+    if(!fmt || dataOffset < 0) return null;
+    if(fmt.audioFormat !== 1 || fmt.bitsPerSample !== 16) return null;
+
+    const bytesPerSample = fmt.bitsPerSample / 8;
+    const frameSize = Math.max(1, fmt.channels * bytesPerSample);
+    const frames = Math.floor(dataSize / frameSize);
+    const out = new Float32Array(frames);
+    let p = dataOffset;
+    for(let i=0;i<frames;i++){
+      const s = view.getInt16(p, true);
+      out[i] = s / 32768;
+      p += frameSize;
+    }
+    return {samples: out, sampleRate: fmt.sampleRate};
+  }catch(e){
+    return null;
+  }
+}
+
 function setDecodeDebug(lines){
   const el = document.getElementById('decodeDebug');
   if(!el) return;
@@ -307,10 +356,21 @@ function setDecodeDebug(lines){
 async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const array = await blob.arrayBuffer();
   const wavMeta = parseSstvMetadataFromWav(array);
-  ensureAudioCtx();
-  const decoded = await audioCtx.decodeAudioData(array.slice(0));
-  const chan = decoded.getChannelData(0);
-  const sampleRate = decoded.sampleRate;
+  const wavPcm = parseWavMonoPcm(array);
+  let chan;
+  let sampleRate;
+  let decodePath;
+  if(wavPcm){
+    chan = wavPcm.samples;
+    sampleRate = wavPcm.sampleRate;
+    decodePath = 'wav-pcm';
+  } else {
+    ensureAudioCtx();
+    const decoded = await audioCtx.decodeAudioData(array.slice(0));
+    chan = decoded.getChannelData(0);
+    sampleRate = decoded.sampleRate;
+    decodePath = 'webaudio';
+  }
   let encodedCols, encodedRows, samplesPerTone, toneMultiplier, syncPerLineSamples, headerOffsetSamples;
   let metadataSource = 'wav-chunk';
 
@@ -388,6 +448,7 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
     'Decoder debug: metadata decode',
     `build=${APP_BUILD}`,
     `metadataSource=${metadataSource}`,
+    `decodePath=${decodePath}`,
     `sampleRate=${sampleRate}`,
     `encodedCols=${encodedCols}`,
     `encodedRows=${encodedRows}`,
