@@ -258,6 +258,7 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const chan = decoded.getChannelData(0);
   const sampleRate = decoded.sampleRate;
   const headerToneMultiplier = detectHeaderToneMultiplier(chan, sampleRate);
+  const headerOffsetSamples = Math.floor(sampleRate * 0.51);
 
   // Get desired output width from UI resolution slider if present
   const desiredCols = parseInt(document.getElementById('resolutionSlider')?.value) || cols;
@@ -266,7 +267,7 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const windowMs = 12; const windowSamples = Math.max(32, Math.floor(sampleRate * (windowMs/1000)));
   const hop = Math.floor(windowSamples/2);
   const mags = [];
-  for(let off=0; off+windowSamples < chan.length; off+=hop){
+  for(let off=headerOffsetSamples; off+windowSamples < chan.length; off+=hop){
     const frame = chan.subarray(off, off+windowSamples);
     const mag = goertzel(frame, sampleRate, 1200);
     mags.push({off, mag});
@@ -278,14 +279,22 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   }
   if(peaks.length === 0){
     // fallback to simple decode
-    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, {...options, toneMultiplier: headerToneMultiplier || options.toneMultiplier || 1});
+    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, {
+      ...options,
+      toneMultiplier: headerToneMultiplier || options.toneMultiplier || 1,
+      headerOffsetSamples
+    });
   }
   // threshold peaks to the largest ones
   const magsOnly = peaks.map(p=>p.mag).slice().sort((a,b)=>a-b);
   const medianMag = magsOnly[Math.floor(magsOnly.length/2)] || 0;
   const strongPeaks = peaks.filter(p=>p.mag > Math.max(1, medianMag*3)).map(p=>p.off).sort((a,b)=>a-b);
   if(strongPeaks.length < 2){
-    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, {...options, toneMultiplier: headerToneMultiplier || options.toneMultiplier || 1});
+    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, {
+      ...options,
+      toneMultiplier: headerToneMultiplier || options.toneMultiplier || 1,
+      headerOffsetSamples
+    });
   }
   // estimate line spacing (samples between sync pulses)
   const diffs = [];
@@ -312,8 +321,10 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const tonesPerLine = Math.max(1, Math.floor(samplesPerLine / samplesPerTone));
   let toneMultiplier = headerToneMultiplier || 1;
   if(!headerToneMultiplier && tonesPerLine / desiredCols > 2.0) toneMultiplier = 3;
+  const pixelsPerLineEstimate = Math.max(1, Math.floor(tonesPerLine / toneMultiplier));
+  // Keep requested width when possible, but never exceed what one line can actually carry.
+  const outCols = Math.max(16, Math.min(desiredCols, pixelsPerLineEstimate));
   // compute output rows using total tones estimate
-  const outCols = desiredCols;
   const totalTonesEstimate = Math.floor(chan.length / samplesPerTone);
   const outRows = Math.min(rows, Math.max(1, Math.floor(totalTonesEstimate / (outCols * toneMultiplier))));
   const imgData = new Uint8ClampedArray(outCols*outRows*4);
@@ -321,10 +332,11 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   // Decode each line with alignment
   for(let y=0;y<outRows;y++){
     const syncPos = strongPeaks[y] || (firstSync + y*samplesPerLine);
-    const lineStart = syncPos + Math.floor(samplesPerTone*0.5);
+    const syncSkipSamples = Math.floor(sampleRate * 0.005);
+    const lineStart = syncPos + syncSkipSamples;
     for(let x=0;x<outCols;x++){
-      const pixelTonePos = Math.floor(x * (tonesPerLine / outCols));
-      const toneIndex = pixelTonePos * toneMultiplier;
+      const pixelIndexInLine = Math.floor(x * (pixelsPerLineEstimate / outCols));
+      const toneIndex = pixelIndexInLine * toneMultiplier;
       const startSample = lineStart + toneIndex * samplesPerTone;
       let r=0,g=0,b=0;
       if(startSample + samplesPerTone >= chan.length) {
@@ -352,22 +364,24 @@ function simpleDecodeFallback(chan, sampleRate, outCols, outRows, options){
   const tonePerPixelMs = options.estimatedToneMs || 10;
   const samplesPerTone = Math.max(4, Math.floor(sampleRate * (tonePerPixelMs/1000)));
   const toneMultiplier = options.toneMultiplier || 1;
+  const headerOffsetSamples = options.headerOffsetSamples || 0;
   const imgData = new Uint8ClampedArray(outCols*outRows*4);
   let p=0;
   for(let y=0;y<outRows;y++){
     for(let x=0;x<outCols;x++){
       const toneBase = p * toneMultiplier;
       const idx = (y*outCols+x)*4;
-      if(toneBase * samplesPerTone >= chan.length){
+      if(headerOffsetSamples + toneBase * samplesPerTone >= chan.length){
         imgData[idx]=0; imgData[idx+1]=0; imgData[idx+2]=0; imgData[idx+3]=255;
       } else if(toneMultiplier === 1){
-        const frame = chan.subarray(toneBase*samplesPerTone, toneBase*samplesPerTone + samplesPerTone);
+        const start = headerOffsetSamples + toneBase * samplesPerTone;
+        const frame = chan.subarray(start, start + samplesPerTone);
         const gray = detectFrameToGray(frame, sampleRate);
         imgData[idx]=imgData[idx+1]=imgData[idx+2]=gray; imgData[idx+3]=255;
       } else {
         const vals = [0,0,0];
         for(let ch=0; ch<toneMultiplier; ch++){
-          const start = (toneBase + ch) * samplesPerTone;
+          const start = headerOffsetSamples + (toneBase + ch) * samplesPerTone;
           if(start + samplesPerTone <= chan.length){
             const frame = chan.subarray(start, start + samplesPerTone);
             vals[ch] = detectFrameToGray(frame, sampleRate);
