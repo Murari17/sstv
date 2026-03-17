@@ -374,10 +374,18 @@ function detectFrameToGray(frame, sampleRate){
       return Math.floor(clamped*255);
     }catch(e){ /* fallback to goertzel below */ }
   }
-  // default: Goertzel centroid across candidate freqs
-  let weightedSum=0, weightTotal=0;
-  for(let f=Math.max(800, fmin-200); f<=Math.min(4000, fmax+200); f+=10){ const mag=goertzel(windowed, sampleRate, f); weightedSum+=mag*f; weightTotal+=mag; }
-  const freqEstimate = weightTotal>0 ? (weightedSum/weightTotal) : (fmin+fmax)/2;
+  // default: Goertzel peak search across candidate freqs.
+  // Peak tracking is more stable than centroid for short SSTV tone frames.
+  let bestFreq = fmin;
+  let bestMag = -1;
+  for(let f=Math.max(800, fmin-200); f<=Math.min(4000, fmax+200); f+=10){
+    const mag = goertzel(windowed, sampleRate, f);
+    if(mag > bestMag){
+      bestMag = mag;
+      bestFreq = f;
+    }
+  }
+  const freqEstimate = bestMag > 0 ? bestFreq : (fmin+fmax)/2;
   const norm = (freqEstimate - fmin)/(fmax-fmin); const clamped = Math.max(0, Math.min(1, norm));
   return Math.floor(clamped*255);
 }
