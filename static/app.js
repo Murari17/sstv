@@ -113,7 +113,15 @@ function synthesizeSSTV(samples, sampleRate=44100, options={}){
   const visSamples = visTones.length * Math.floor(sampleRate*0.05);
   const modeMarkerFreq = 1300;
   const modeMarkerSamples = Math.floor(sampleRate * 0.06);
-  const out = new Float32Array(leaderSamples + visSamples + modeMarkerSamples + totalSamples);
+  const metaToneSamples = Math.max(1, Math.floor(sampleRate * 0.03));
+  const metaBaseFreq = 2600;
+  const metaFreqs = [
+    metaBaseFreq + cols,
+    metaBaseFreq + rows,
+    metaBaseFreq + samplePerTone
+  ];
+  const metaSamplesTotal = metaToneSamples * metaFreqs.length;
+  const out = new Float32Array(leaderSamples + visSamples + modeMarkerSamples + metaSamplesTotal + totalSamples);
   let widx = 0;
   // leader
   for(let i=0;i<leaderSamples;i++) out[widx++] = Math.sin(2*Math.PI*1900*(i/sampleRate)) * 0.8;
@@ -124,6 +132,10 @@ function synthesizeSSTV(samples, sampleRate=44100, options={}){
   }
   // Mode marker helps decoder verify RGB payload.
   for(let i=0;i<modeMarkerSamples;i++) out[widx++] = Math.sin(2*Math.PI*modeMarkerFreq*(i/sampleRate)) * 0.8;
+  // Metadata tones encode: cols, rows, samplesPerTone.
+  for(const mf of metaFreqs){
+    for(let i=0;i<metaToneSamples;i++) out[widx++] = Math.sin(2*Math.PI*mf*(i/sampleRate)) * 0.8;
+  }
   // now write lines
 
   for(let r=0;r<rows;r++){
@@ -148,7 +160,7 @@ function synthesizeSSTV(samples, sampleRate=44100, options={}){
   }
   const meta = { samplePerTone, tonePerPixelMs, toneMultiplier, cols, rows, totalTones: totalTones };
   meta.colorMode = 'rgb';
-  meta.headerOffset = leaderSamples + visSamples + modeMarkerSamples;
+  meta.headerOffset = leaderSamples + visSamples + modeMarkerSamples + metaSamplesTotal;
   return { buffer: out, sampleRate, meta };
 }
 
@@ -215,6 +227,20 @@ function goertzel(samples, sampleRate, targetFreq){
   return Math.sqrt(real*real + imag*imag);
 }
 
+function detectDominantFrequency(frame, sampleRate, fStart, fEnd, step=5){
+  if(!frame || frame.length < 8) return fStart;
+  let bestFreq = fStart;
+  let bestMag = -1;
+  for(let f=fStart; f<=fEnd; f+=step){
+    const mag = goertzel(frame, sampleRate, f);
+    if(mag > bestMag){
+      bestMag = mag;
+      bestFreq = f;
+    }
+  }
+  return bestFreq;
+}
+
 // Improved decoder with sync/VIS detection, auto RGB detection and resolution control
 async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const array = await blob.arrayBuffer();
@@ -222,87 +248,49 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const decoded = await audioCtx.decodeAudioData(array.slice(0));
   const chan = decoded.getChannelData(0);
   const sampleRate = decoded.sampleRate;
-  const headerOffsetSamples = Math.floor(sampleRate * 0.51);
-  const encodedCols = 320;
-  const encodedRows = 256;
+  const leaderSamples = Math.floor(sampleRate * 0.3);
+  const visToneSamples = Math.floor(sampleRate * 0.05);
+  const visSamples = visToneSamples * 3;
+  const modeMarkerSamples = Math.floor(sampleRate * 0.06);
+  const metaToneSamples = Math.max(1, Math.floor(sampleRate * 0.03));
+  const metaBaseFreq = 2600;
+  const metaStart = leaderSamples + visSamples + modeMarkerSamples;
+  if(metaStart + metaToneSamples*3 >= chan.length){
+    return simpleDecodeFallback(chan, sampleRate, cols, rows, options);
+  }
+
+  const colsFrame = chan.subarray(metaStart, metaStart + metaToneSamples);
+  const rowsFrame = chan.subarray(metaStart + metaToneSamples, metaStart + metaToneSamples*2);
+  const sptFrame = chan.subarray(metaStart + metaToneSamples*2, metaStart + metaToneSamples*3);
+  const encodedCols = Math.max(16, Math.min(1024, Math.round(detectDominantFrequency(colsFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
+  const encodedRows = Math.max(16, Math.min(1024, Math.round(detectDominantFrequency(rowsFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
+  const samplesPerTone = Math.max(4, Math.min(4096, Math.round(detectDominantFrequency(sptFrame, sampleRate, 2600, 4000, 2) - metaBaseFreq)));
+
   const toneMultiplier = 3;
   const syncPerLineSamples = Math.floor(sampleRate * 0.005);
-
-  // Get desired output width from UI resolution slider if present
-  const desiredCols = parseInt(document.getElementById('resolutionSlider')?.value) || cols;
-
-  // Step 1: sliding Goertzel at 1200Hz to find sync-like pulses
-  const windowMs = 12; const windowSamples = Math.max(32, Math.floor(sampleRate * (windowMs/1000)));
-  const hop = Math.floor(windowSamples/2);
-  const mags = [];
-  for(let off=headerOffsetSamples; off+windowSamples < chan.length; off+=hop){
-    const frame = chan.subarray(off, off+windowSamples);
-    const mag = goertzel(frame, sampleRate, 1200);
-    mags.push({off, mag});
-  }
-  // find local maxima in mags
-  const peaks = [];
-  for(let i=1;i<mags.length-1;i++){
-    if(mags[i].mag > mags[i-1].mag && mags[i].mag > mags[i+1].mag) peaks.push(mags[i]);
-  }
-  if(peaks.length === 0){
-    // fallback to simple decode
-    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, {
-      ...options,
-      toneMultiplier: 3,
-      encodedCols,
-      encodedRows,
-      headerOffsetSamples
-    });
-  }
-  // threshold peaks to the largest ones
-  const magsOnly = peaks.map(p=>p.mag).slice().sort((a,b)=>a-b);
-  const medianMag = magsOnly[Math.floor(magsOnly.length/2)] || 0;
-  const strongPeaks = peaks.filter(p=>p.mag > Math.max(1, medianMag*3)).map(p=>p.off).sort((a,b)=>a-b);
-  if(strongPeaks.length < 2){
-    return simpleDecodeFallback(chan, sampleRate, desiredCols, rows, {
-      ...options,
-      toneMultiplier: 3,
-      encodedCols,
-      encodedRows,
-      headerOffsetSamples
-    });
-  }
-  // estimate line spacing (samples between sync pulses)
-  const diffs = [];
-  for(let i=1;i<strongPeaks.length;i++) diffs.push(strongPeaks[i]-strongPeaks[i-1]);
-  diffs.sort((a,b)=>a-b);
-  const medianDiff = diffs[Math.floor(diffs.length/2)] || diffs[0] || Math.floor(sampleRate*0.2);
-  const samplesPerLine = Math.max(1, Math.round(medianDiff));
-
-  // Derive tone size from known RGB geometry.
-  const payloadPerLine = Math.max(1, samplesPerLine - syncPerLineSamples);
-  const samplesPerTone = Math.max(4, Math.round(payloadPerLine / (encodedCols * toneMultiplier)));
+  const headerOffsetSamples = metaStart + metaToneSamples*3;
+  const totalPerLine = syncPerLineSamples + encodedCols * toneMultiplier * samplesPerTone;
+  const desiredCols = parseInt(document.getElementById('resolutionSlider')?.value) || encodedCols;
   const outCols = Math.max(16, Math.min(desiredCols, encodedCols));
-  const outRows = Math.min(encodedRows, Math.max(1, strongPeaks.length));
+  const possibleRows = Math.floor((chan.length - headerOffsetSamples) / Math.max(1, totalPerLine));
+  const outRows = Math.max(1, Math.min(encodedRows, possibleRows));
   const imgData = new Uint8ClampedArray(outCols*outRows*4);
 
-  // Decode each line with alignment
-  const firstSync = strongPeaks[0];
   for(let y=0;y<outRows;y++){
-    const syncPos = strongPeaks[y] || (firstSync + y*samplesPerLine);
-    const lineStart = syncPos + syncPerLineSamples;
+    const lineStart = headerOffsetSamples + y * totalPerLine + syncPerLineSamples;
     for(let x=0;x<outCols;x++){
       const srcX = Math.floor((x / outCols) * encodedCols);
-      const toneIndex = srcX * toneMultiplier;
-      const startSample = lineStart + toneIndex * samplesPerTone;
-      let r=0,g=0,b=0;
-      if(startSample + samplesPerTone >= chan.length) {
-        r=g=b=0;
-      } else {
-        const vals = [];
-        for(let ch=0; ch<toneMultiplier; ch++){
-          const frame = chan.subarray(startSample + ch*samplesPerTone, startSample + (ch+1)*samplesPerTone);
-          vals.push(detectFrameToGray(frame, sampleRate));
-        }
-        r = vals[0]||0; g = vals[1]||0; b = vals[2]||0;
+      const toneBase = srcX * toneMultiplier;
+      const startSample = lineStart + toneBase * samplesPerTone;
+      const idx = (y*outCols + x)*4;
+      if(startSample + samplesPerTone*3 > chan.length){
+        imgData[idx]=0; imgData[idx+1]=0; imgData[idx+2]=0; imgData[idx+3]=255;
+        continue;
       }
-      const idx = (y*outCols + x)*4; imgData[idx]=r; imgData[idx+1]=g; imgData[idx+2]=b; imgData[idx+3]=255;
+      const r = detectFrameToGray(chan.subarray(startSample, startSample + samplesPerTone), sampleRate);
+      const g = detectFrameToGray(chan.subarray(startSample + samplesPerTone, startSample + samplesPerTone*2), sampleRate);
+      const b = detectFrameToGray(chan.subarray(startSample + samplesPerTone*2, startSample + samplesPerTone*3), sampleRate);
+      imgData[idx]=r; imgData[idx+1]=g; imgData[idx+2]=b; imgData[idx+3]=255;
     }
   }
   return {width:outCols, height:outRows, data:imgData};
@@ -597,16 +585,15 @@ document.getElementById('encodeBtn').addEventListener('click', async ()=>{
   const img = window._lastImage; if(!img) { alert('Select an image first'); return; }
   const sr = parseInt(document.getElementById('sampleRate').value) || 44100;
   const duration = parseInt(document.getElementById('encodeDuration').value) || 10;
-  // Determine appropriate resolution so the total pixels fit the duration given tonePerPixelMs
-  // We'll assume tonePerPixelMs will be computed inside synthesize; approximate using 10ms base.
-  const approxToneMs = Math.max(1, Math.min(200, (duration*1000*0.98) / (320*256)));
-  // Compute desired total pixels = durationSeconds * 1000 / toneMs
-  const totalMs = duration*1000*0.98;
-  const desiredToneMs = Math.max(1, Math.min(200, totalMs / (32*32))); // ensure minimum image of 32x32
-  const desiredTotalPixels = Math.floor(totalMs / desiredToneMs);
-  // Use fixed geometry so decoder can reliably reconstruct RGB data.
-  const cols = 320;
-  const rows = 256;
+  // Choose geometry that keeps per-tone duration long enough for stable color decoding.
+  const effectiveMs = duration * 1000 * 0.98;
+  const minToneMs = 6;
+  const maxPixels = Math.max(32*32, Math.floor(effectiveMs / (minToneMs * 3)));
+  const aspect = img.width / img.height;
+  let rows = Math.max(32, Math.round(Math.sqrt(maxPixels / Math.max(0.1, aspect))));
+  let cols = Math.max(32, Math.round(rows * aspect));
+  rows = Math.min(256, rows);
+  cols = Math.min(512, cols);
   const samples = imageToRGBSamples(img, cols, rows);
   const bufObj = synthesizeSSTV(samples, sr, {durationSeconds: duration});
   generatedBuffer = bufObj;
