@@ -12,7 +12,7 @@ let playingSource = null;
 let playingStartTime = 0;
 let playingOffsetSeconds = 0;
 let playingPaused = false;
-const APP_BUILD = '2026-03-17-03';
+const APP_BUILD = '2026-03-17-04';
 
 function ensureAudioCtx(){
   if(!audioCtx){
@@ -453,6 +453,7 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
     `encodedCols=${encodedCols}`,
     `encodedRows=${encodedRows}`,
     `samplesPerTone=${samplesPerTone}`,
+    `toneMs=${(samplesPerTone*1000/sampleRate).toFixed(2)}`,
     `headerOffsetSamples=${headerOffsetSamples}`,
     `outCols=${outCols}`,
     `outRows=${outRows}`,
@@ -569,8 +570,10 @@ function drawDecodedImage(imgObj){
   const dpr = useDPR ? (window.devicePixelRatio || 1) : 1;
   canvas.width = Math.max(1, Math.floor(imgObj.width * dpr));
   canvas.height = Math.max(1, Math.floor(imgObj.height * dpr));
-  canvas.style.width = imgObj.width + 'px';
-  canvas.style.height = imgObj.height + 'px';
+  const displayWidth = parseInt(document.getElementById('resolutionSlider')?.value) || imgObj.width;
+  const displayHeight = Math.max(1, Math.round(displayWidth * (imgObj.height / imgObj.width)));
+  canvas.style.width = displayWidth + 'px';
+  canvas.style.height = displayHeight + 'px';
   const ctx = canvas.getContext('2d');
   if(dpr !== 1) ctx.setTransform(dpr,0,0,dpr,0,0); else ctx.setTransform(1,0,0,1,0,0);
   const id = new ImageData(imgObj.data,imgObj.width,imgObj.height);
@@ -775,8 +778,14 @@ document.getElementById('encodeBtn').addEventListener('click', async ()=>{
   const minToneMs = 6;
   const maxPixels = Math.max(32*32, Math.floor(effectiveMs / (minToneMs * 3)));
   const aspect = img.width / img.height;
-  let rows = Math.max(32, Math.round(Math.sqrt(maxPixels / Math.max(0.1, aspect))));
-  let cols = Math.max(32, Math.round(rows * aspect));
+  let rows = Math.max(8, Math.round(Math.sqrt(maxPixels / Math.max(0.1, aspect))));
+  let cols = Math.max(8, Math.round(rows * aspect));
+  const pxCount = cols * rows;
+  if(pxCount > maxPixels){
+    const scale = Math.sqrt(maxPixels / pxCount);
+    cols = Math.max(8, Math.floor(cols * scale));
+    rows = Math.max(8, Math.floor(rows * scale));
+  }
   rows = Math.min(256, rows);
   cols = Math.min(512, cols);
   const samples = imageToRGBSamples(img, cols, rows);
