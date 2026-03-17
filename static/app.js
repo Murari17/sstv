@@ -12,7 +12,7 @@ let playingSource = null;
 let playingStartTime = 0;
 let playingOffsetSeconds = 0;
 let playingPaused = false;
-const APP_BUILD = '2026-03-17-02';
+const APP_BUILD = '2026-03-17-03';
 
 function ensureAudioCtx(){
   if(!audioCtx){
@@ -538,7 +538,7 @@ function detectFrameToGray(frame, sampleRate){
       let bestBin=0, bestMag=0;
       for(let bin=0; bin<fftSize/2; bin++){
         const freq = bin * (sampleRate / fftSize);
-        if(freq < fmin-200 || freq > fmax+200) continue;
+        if(freq < fmin || freq > fmax) continue;
         const mag = Math.sqrt(re[bin]*re[bin] + im[bin]*im[bin]);
         if(mag > bestMag){ bestMag = mag; bestBin = bin; }
       }
@@ -551,7 +551,7 @@ function detectFrameToGray(frame, sampleRate){
   // Peak tracking is more stable than centroid for short SSTV tone frames.
   let bestFreq = fmin;
   let bestMag = -1;
-  for(let f=Math.max(800, fmin-200); f<=Math.min(4000, fmax+200); f+=10){
+  for(let f=fmin; f<=fmax; f+=5){
     const mag = goertzel(windowed, sampleRate, f);
     if(mag > bestMag){
       bestMag = mag;
