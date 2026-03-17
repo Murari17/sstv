@@ -12,6 +12,7 @@ let playingSource = null;
 let playingStartTime = 0;
 let playingOffsetSeconds = 0;
 let playingPaused = false;
+const APP_BUILD = '2026-03-17-01';
 
 function ensureAudioCtx(){
   if(!audioCtx){
@@ -385,6 +386,7 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   }
   setDecodeDebug([
     'Decoder debug: metadata decode',
+    `build=${APP_BUILD}`,
     `metadataSource=${metadataSource}`,
     `sampleRate=${sampleRate}`,
     `encodedCols=${encodedCols}`,
@@ -438,6 +440,7 @@ function simpleDecodeFallback(chan, sampleRate, outCols, outRows, options){
   }
   setDecodeDebug([
     'Decoder debug: fallback decode',
+    `build=${APP_BUILD}`,
     `sampleRate=${sampleRate}`,
     `encodedCols=${encodedCols}`,
     `encodedRows=${encodedRows}`,
