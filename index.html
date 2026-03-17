@@ -22,7 +22,7 @@
   <label>Mode: <select id="modeSelect"><option>Scottie S1 (simulated)</option><option>Robot 36 (simulated)</option><option>Martin M1 (simulated)</option></select></label>
         <label>Color mode: RGB (fixed)</label>
   <label>Playback sample rate: <input id="sampleRate" type="number" value="44100"></label>
-  <label>Encode duration (seconds): <input id="encodeDuration" type="number" value="10" min="1" step="1"></label>
+  <label>Encode duration (seconds): <input id="encodeDuration" type="number" value="30" min="1" step="1"></label>
         <label>Volume: <input id="volumeControl" type="range" min="0" max="1" step="0.01" value="1"></label>
         <div class="buttons">
           <button id="encodeBtn">Encode & Play</button>
@@ -49,7 +49,7 @@
       <div class="col">
         <h2>Decoder</h2>
         <label>Upload SSTV audio (WAV/MP3): <input id="audioFile" type="file" accept="audio/*"></label>
-  <label>Decode duration (seconds): <input id="decodeDuration" type="number" value="10" min="1" step="1"></label>
+  <label>Decode duration (seconds): <input id="decodeDuration" type="number" value="30" min="1" step="1"></label>
         <label>Decode color mode: RGB (fixed)</label>
   <label>Resolution (width px): <input id="resolutionSlider" type="range" min="32" max="512" value="320"></label>
   <label>Detector: <select id="detectorSelect"><option value="goertzel">Goertzel (default)</option><option value="fft">FFT (fft.js)</option></select></label>
