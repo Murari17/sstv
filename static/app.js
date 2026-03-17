@@ -258,6 +258,7 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const chan = decoded.getChannelData(0);
   const sampleRate = decoded.sampleRate;
   const headerToneMultiplier = detectHeaderToneMultiplier(chan, sampleRate);
+  const forcedToneMultiplier = options.forceToneMultiplier || null;
   const headerOffsetSamples = Math.floor(sampleRate * 0.51);
 
   // Get desired output width from UI resolution slider if present
@@ -303,33 +304,29 @@ async function decodeAudioBlob(blob, cols=320, rows=256, options={}){
   const medianDiff = diffs[Math.floor(diffs.length/2)] || diffs[0] || Math.floor(sampleRate*0.2);
   const samplesPerLine = Math.max(1, Math.round(medianDiff));
 
-  // estimate samplesPerTone by autocorrelation within first detected line region
-  const firstSync = strongPeaks[0];
-  const nextSync = strongPeaks[1] || firstSync + samplesPerLine;
-  const lineWindow = chan.subarray(firstSync, Math.min(nextSync, chan.length));
-  // autocorrelation-like search for period
-  let bestLag=0, bestScore=Infinity;
-  const maxLag = Math.min(2000, Math.floor(lineWindow.length/8));
-  for(let lag=1; lag<maxLag; lag++){
-    let acc=0;
-    for(let i=0;i+lag<lineWindow.length;i++) acc += Math.abs(lineWindow[i] - lineWindow[i+lag]);
-    if(acc < bestScore){ bestScore = acc; bestLag = lag; }
+  // Infer tone multiplier first, then derive tone size from line geometry.
+  let toneMultiplier = forcedToneMultiplier || headerToneMultiplier || 1;
+  const syncPerLineSamples = Math.floor(sampleRate * 0.005);
+  const payloadPerLine = Math.max(1, samplesPerLine - syncPerLineSamples);
+  let samplesPerTone = Math.max(4, Math.round(payloadPerLine / Math.max(1, desiredCols * toneMultiplier)));
+  let tonesPerLine = Math.max(1, Math.floor(payloadPerLine / samplesPerTone));
+  // Secondary heuristic for unknown files when mode wasn't forced or marked.
+  if(!forcedToneMultiplier && !headerToneMultiplier){
+    const grayscaleErr = Math.abs((tonesPerLine / 1) - desiredCols);
+    const rgbErr = Math.abs((tonesPerLine / 3) - desiredCols);
+    toneMultiplier = rgbErr < grayscaleErr ? 3 : 1;
+    samplesPerTone = Math.max(4, Math.round(payloadPerLine / Math.max(1, desiredCols * toneMultiplier)));
+    tonesPerLine = Math.max(1, Math.floor(payloadPerLine / samplesPerTone));
   }
-  let samplesPerTone = Math.max(4, bestLag || Math.max(1, Math.floor(sampleRate*0.01)));
-
-  // compute tones per line and infer toneMultiplier (RGB if ~3x)
-  const tonesPerLine = Math.max(1, Math.floor(samplesPerLine / samplesPerTone));
-  let toneMultiplier = headerToneMultiplier || 1;
-  if(!headerToneMultiplier && tonesPerLine / desiredCols > 2.0) toneMultiplier = 3;
   const pixelsPerLineEstimate = Math.max(1, Math.floor(tonesPerLine / toneMultiplier));
   // Keep requested width when possible, but never exceed what one line can actually carry.
   const outCols = Math.max(16, Math.min(desiredCols, pixelsPerLineEstimate));
-  // compute output rows using total tones estimate
-  const totalTonesEstimate = Math.floor(chan.length / samplesPerTone);
-  const outRows = Math.min(rows, Math.max(1, Math.floor(totalTonesEstimate / (outCols * toneMultiplier))));
+  // Strong sync peaks are line starts, so they are a better row estimate than global tone count.
+  const outRows = Math.min(rows, Math.max(1, strongPeaks.length));
   const imgData = new Uint8ClampedArray(outCols*outRows*4);
 
   // Decode each line with alignment
+  const firstSync = strongPeaks[0];
   for(let y=0;y<outRows;y++){
     const syncPos = strongPeaks[y] || (firstSync + y*samplesPerLine);
     const syncSkipSamples = Math.floor(sampleRate * 0.005);
@@ -722,7 +719,13 @@ document.getElementById('audioFile').addEventListener('change', (e)=>{ window._l
 document.getElementById('decodeBtn').addEventListener('click', async ()=>{
   const f = window._lastAudioFile; if(!f) { alert('Select an audio file first'); return; }
   const duration = parseInt(document.getElementById('decodeDuration').value) || 10;
-  const out = await decodeAudioBlob(f,320,256, {durationSeconds: duration, estimatedToneMs:  Math.max(1, (duration*1000*0.98) / (320*256))});
+  const decodeColorMode = document.getElementById('decodeColorMode')?.value || 'auto';
+  const forceToneMultiplier = decodeColorMode === 'rgb' ? 3 : (decodeColorMode === 'grayscale' ? 1 : null);
+  const out = await decodeAudioBlob(f,320,256, {
+    durationSeconds: duration,
+    estimatedToneMs: Math.max(1, (duration*1000*0.98) / (320*256)),
+    forceToneMultiplier
+  });
   drawDecodedImage(out);
 });
 

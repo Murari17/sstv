@@ -50,6 +50,7 @@
         <h2>Decoder</h2>
         <label>Upload SSTV audio (WAV/MP3): <input id="audioFile" type="file" accept="audio/*"></label>
   <label>Decode duration (seconds): <input id="decodeDuration" type="number" value="10" min="1" step="1"></label>
+        <label>Decode color mode: <select id="decodeColorMode"><option value="auto">Auto</option><option value="rgb">Force RGB</option><option value="grayscale">Force Grayscale</option></select></label>
   <label>Resolution (width px): <input id="resolutionSlider" type="range" min="32" max="512" value="320"></label>
   <label>Detector: <select id="detectorSelect"><option value="goertzel">Goertzel (default)</option><option value="fft">FFT (fft.js)</option></select></label>
   <label><input id="useDPR" type="checkbox"> Scale canvases by devicePixelRatio (high-DPI)</label>
