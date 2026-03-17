@@ -12,7 +12,7 @@ let playingSource = null;
 let playingStartTime = 0;
 let playingOffsetSeconds = 0;
 let playingPaused = false;
-const APP_BUILD = '2026-03-17-04';
+const APP_BUILD = '2026-03-17-05';
 
 function ensureAudioCtx(){
   if(!audioCtx){
@@ -92,13 +92,14 @@ function synthesizeSSTV(samples, sampleRate=44100, options={}){
   // Scottie S1 (very simplified): each line has a VIS/sync period + pixel periods.
   // For our emulator we'll compute tone ms per pixel so full image fits duration.
   let tonePerPixelMs = 10;
+  const minToneMs = options.minToneMs || 6;
   if(options.durationSeconds && options.durationSeconds > 0){
     const totalMs = options.durationSeconds * 1000;
     // Reserve a small fraction for syncs overhead (~2%):
     const effectiveMs = Math.max(100, totalMs * 0.98);
     // compute per-tone ms using totalTones (accounts for RGB channels)
     tonePerPixelMs = effectiveMs / totalTones;
-    tonePerPixelMs = Math.max(1, Math.min(200, tonePerPixelMs));
+    tonePerPixelMs = Math.max(minToneMs, Math.min(200, tonePerPixelMs));
   }
 
   const samplePerTone = Math.max(1, Math.floor(sampleRate * (tonePerPixelMs/1000)));
@@ -776,7 +777,7 @@ document.getElementById('encodeBtn').addEventListener('click', async ()=>{
   // Choose geometry that keeps per-tone duration long enough for stable color decoding.
   const effectiveMs = duration * 1000 * 0.98;
   const minToneMs = 6;
-  const maxPixels = Math.max(32*32, Math.floor(effectiveMs / (minToneMs * 3)));
+  const maxPixels = Math.max(64, Math.floor(effectiveMs / (minToneMs * 3)));
   const aspect = img.width / img.height;
   let rows = Math.max(8, Math.round(Math.sqrt(maxPixels / Math.max(0.1, aspect))));
   let cols = Math.max(8, Math.round(rows * aspect));
@@ -789,7 +790,7 @@ document.getElementById('encodeBtn').addEventListener('click', async ()=>{
   rows = Math.min(256, rows);
   cols = Math.min(512, cols);
   const samples = imageToRGBSamples(img, cols, rows);
-  const bufObj = synthesizeSSTV(samples, sr, {durationSeconds: duration});
+  const bufObj = synthesizeSSTV(samples, sr, {durationSeconds: duration, minToneMs});
   generatedBuffer = bufObj;
   playingOffsetSeconds = 0; playingPaused = false;
   const src = playFloat32Buffer(bufObj);
