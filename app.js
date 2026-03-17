@@ -12,7 +12,10 @@ let playingSource = null;
 let playingStartTime = 0;
 let playingOffsetSeconds = 0;
 let playingPaused = false;
-const APP_BUILD = '2026-03-17-05';
+const APP_BUILD = '2026-03-17-06';
+const SAMPLE_RATE = 44100;
+const ENCODE_DURATION = 60;
+const MIN_TONE_MS = 5;
 
 function ensureAudioCtx(){
   if(!audioCtx){
@@ -567,18 +570,16 @@ function detectFrameToGray(frame, sampleRate){
 
 function drawDecodedImage(imgObj){
   const canvas = document.getElementById('decodedCanvas');
-  const useDPR = document.getElementById('useDPR')?.checked;
-  const dpr = useDPR ? (window.devicePixelRatio || 1) : 1;
-  canvas.width = Math.max(1, Math.floor(imgObj.width * dpr));
-  canvas.height = Math.max(1, Math.floor(imgObj.height * dpr));
-  const displayWidth = parseInt(document.getElementById('resolutionSlider')?.value) || imgObj.width;
-  const displayHeight = Math.max(1, Math.round(displayWidth * (imgObj.height / imgObj.width)));
-  canvas.style.width = displayWidth + 'px';
-  canvas.style.height = displayHeight + 'px';
+  const tmp = document.createElement('canvas');
+  tmp.width = imgObj.width;
+  tmp.height = imgObj.height;
+  tmp.getContext('2d').putImageData(new ImageData(imgObj.data, imgObj.width, imgObj.height), 0, 0);
+  const scale = Math.max(4, Math.floor(400 / Math.max(1, imgObj.width)));
+  canvas.width = imgObj.width * scale;
+  canvas.height = imgObj.height * scale;
   const ctx = canvas.getContext('2d');
-  if(dpr !== 1) ctx.setTransform(dpr,0,0,dpr,0,0); else ctx.setTransform(1,0,0,1,0,0);
-  const id = new ImageData(imgObj.data,imgObj.width,imgObj.height);
-  ctx.putImageData(id,0,0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
 }
 
 function drawLiveImage(imgObj){
@@ -772,12 +773,10 @@ document.getElementById('imgFile').addEventListener('change', async (e)=>{
 
 document.getElementById('encodeBtn').addEventListener('click', async ()=>{
   const img = window._lastImage; if(!img) { alert('Select an image first'); return; }
-  const sr = parseInt(document.getElementById('sampleRate').value) || 44100;
-  const duration = parseInt(document.getElementById('encodeDuration').value) || 10;
-  // Choose geometry that keeps per-tone duration long enough for stable color decoding.
+  const duration = ENCODE_DURATION;
+  const sr = SAMPLE_RATE;
   const effectiveMs = duration * 1000 * 0.98;
-  const minToneMs = 6;
-  const maxPixels = Math.max(64, Math.floor(effectiveMs / (minToneMs * 3)));
+  const maxPixels = Math.max(64, Math.floor(effectiveMs / (MIN_TONE_MS * 3)));
   const aspect = img.width / img.height;
   let rows = Math.max(8, Math.round(Math.sqrt(maxPixels / Math.max(0.1, aspect))));
   let cols = Math.max(8, Math.round(rows * aspect));
@@ -790,53 +789,18 @@ document.getElementById('encodeBtn').addEventListener('click', async ()=>{
   rows = Math.min(256, rows);
   cols = Math.min(512, cols);
   const samples = imageToRGBSamples(img, cols, rows);
-  const bufObj = synthesizeSSTV(samples, sr, {durationSeconds: duration, minToneMs});
+  const bufObj = synthesizeSSTV(samples, sr, {durationSeconds: duration, minToneMs: MIN_TONE_MS});
   generatedBuffer = bufObj;
+  document.getElementById('playBtn').disabled = false;
+  document.getElementById('downloadWavBtn').disabled = false;
+  document.getElementById('encodeBtn').textContent = 'Re-encode';
+});
+
+document.getElementById('playBtn').addEventListener('click', ()=>{
+  if(!generatedBuffer) return;
+  ensureAudioCtx();
   playingOffsetSeconds = 0; playingPaused = false;
-  const src = playFloat32Buffer(bufObj);
-  // If live decode is enabled, wire an analyser to the playing node
-  const liveToggle = document.getElementById('liveDecodeToggle');
-  if(liveToggle && liveToggle.checked){
-    // create a node from generated buffer and connect to master gain; use an analyser to read from masterGain
-    try{
-      if(liveDecodeAnalyser) { /* reuse */ }
-      else {
-        liveDecodeAnalyser = audioCtx.createAnalyser(); liveDecodeAnalyser.fftSize = 2048;
-        ensureAudioCtx(); masterGain.connect(liveDecodeAnalyser);
-      }
-      startLiveDecoding(liveDecodeAnalyser, cols || 320, rows || 256);
-    }catch(e){ console.warn('live decode setup failed', e); }
-  }
-  src.onended = ()=>{ console.log('playback ended'); };
-  // enable pause/stop
-  document.getElementById('pauseBtn').disabled = false;
-  document.getElementById('stopBtn').disabled = false;
-  document.getElementById('downloadWavBtn').disabled=false;
-});
-
-document.getElementById('pauseBtn').addEventListener('click', ()=>{
-  if(!playingSource) return;
-  if(!playingPaused){
-    // pause: stop source and record offset
-    const elapsed = audioCtx.currentTime - playingStartTime;
-    try{ playingSource.stop(); }catch(e){}
-    playingOffsetSeconds = elapsed;
-    playingPaused = true;
-    document.getElementById('pauseBtn').innerText = 'Resume';
-  } else {
-    // resume
-    const src = playFloat32Buffer(generatedBuffer);
-    playingSource = src;
-    playingPaused = false;
-    document.getElementById('pauseBtn').innerText = 'Pause';
-  }
-});
-
-document.getElementById('stopBtn').addEventListener('click', ()=>{
-  if(playingSource){ try{ playingSource.stop(); }catch(e){} }
-  playingSource = null; playingOffsetSeconds = 0; playingPaused = false;
-  document.getElementById('pauseBtn').disabled = true; document.getElementById('stopBtn').disabled = true; document.getElementById('pauseBtn').innerText='Pause';
-  stopLiveDecoding();
+  playFloat32Buffer(generatedBuffer);
 });
 
 document.getElementById('downloadWavBtn').addEventListener('click', ()=>{
@@ -845,77 +809,13 @@ document.getElementById('downloadWavBtn').addEventListener('click', ()=>{
 });
 
 // decode uploaded audio
-document.getElementById('audioFile').addEventListener('change', (e)=>{ window._lastAudioFile = e.target.files[0]; });
-
-document.getElementById('decodeBtn').addEventListener('click', async ()=>{
-  const f = window._lastAudioFile; if(!f) { alert('Select an audio file first'); return; }
-  const duration = parseInt(document.getElementById('decodeDuration').value) || 10;
-  const out = await decodeAudioBlob(f,320,256, {
-    durationSeconds: duration,
-    estimatedToneMs: Math.max(1, (duration*1000*0.98) / (320*256))
-  });
+document.getElementById('audioFile').addEventListener('change', async (e)=>{
+  const f = e.target.files[0]; if(!f) return;
+  setDecodeDebug(['Decoder debug: decoding...']);
+  const out = await decodeAudioBlob(f, 320, 256, {});
   drawDecodedImage(out);
 });
 
-// Microphone listen
-let micStream=null, micSource=null, analyser=null, micProcessor=null;
 
-document.getElementById('micListenBtn').addEventListener('click', async ()=>{
-  ensureAudioCtx();
-  if(micStream) return;
-  try{
-    micStream = await navigator.mediaDevices.getUserMedia({audio:true});
-  }catch(err){ alert('Microphone access denied or unavailable'); return; }
-  micSource = audioCtx.createMediaStreamSource(micStream);
-  analyser = audioCtx.createAnalyser(); analyser.fftSize=2048;
-  micSource.connect(analyser);
-  const data = new Float32Array(analyser.fftSize);
-  document.getElementById('stopMicBtn').disabled=false;
-  document.getElementById('micListenBtn').disabled=true;
-  // simple live visualization
-  function draw(){
-    analyser.getFloatTimeDomainData(data);
-    const viz = document.getElementById('viz'); const vctx = viz.getContext('2d');
-    vctx.fillStyle='#fff'; vctx.fillRect(0,0,viz.width,viz.height);
-    vctx.strokeStyle='#007'; vctx.beginPath();
-    for(let i=0;i<data.length;i++){
-      const x = (i/data.length)*viz.width; const y = (0.5+data[i]*0.5)*viz.height;
-      if(i===0) vctx.moveTo(x,y); else vctx.lineTo(x,y);
-    }
-    vctx.stroke();
-    micProcessor = requestAnimationFrame(draw);
-  }
-  draw();
-});
-
-document.getElementById('stopMicBtn').addEventListener('click', ()=>{
-  if(micStream){
-    micStream.getTracks().forEach(t=>t.stop()); micStream=null;
-  }
-  if(micProcessor) cancelAnimationFrame(micProcessor);
-  micProcessor=null; document.getElementById('stopMicBtn').disabled=true; document.getElementById('micListenBtn').disabled=false;
-});
-
-// Volume control
-const volumeControl = document.getElementById('volumeControl');
-if(volumeControl){
-  volumeControl.addEventListener('input', (e)=>{
-    ensureAudioCtx();
-    const v = parseFloat(e.target.value);
-    if(masterGain) masterGain.gain.setValueAtTime(v, audioCtx.currentTime);
-  });
-}
-
-// Live decode UI wiring
-const liveToggle = document.getElementById('liveDecodeToggle');
-const startLiveBtn = document.getElementById('startLiveDecodeBtn');
-const stopLiveBtn = document.getElementById('stopLiveDecodeBtn');
-if(liveToggle){
-  liveToggle.addEventListener('change', ()=>{
-    if(liveToggle.checked){ startLiveBtn.disabled=false; } else { startLiveBtn.disabled=true; stopLiveBtn.disabled=true; stopLiveDecoding(); }
-  });
-}
-if(startLiveBtn){ startLiveBtn.addEventListener('click', ()=>{ if(!liveDecodeAnalyser){ liveDecodeAnalyser = audioCtx.createAnalyser(); liveDecodeAnalyser.fftSize=2048; masterGain.connect(liveDecodeAnalyser); } startLiveDecoding(liveDecodeAnalyser,320,256); startLiveBtn.disabled=true; stopLiveBtn.disabled=false; }); }
-if(stopLiveBtn){ stopLiveBtn.addEventListener('click', ()=>{ stopLiveDecoding(); startLiveBtn.disabled=false; stopLiveBtn.disabled=true; }); }
 
 // small note: this is an educational emulator. Real SSTV uses precise timing, sync pulses, multi-tone encoding per line and color channels.

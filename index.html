@@ -5,72 +5,35 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>SSTV Web Emulator</title>
   <link rel="stylesheet" href="static/styles.css">
-  <!-- Optional DSP/FFT libraries (loaded from CDNs) for improved decoding accuracy -->
-  <script src="https://cdn.jsdelivr.net/npm/fft.js@0.3.0/dist/fft.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dsp.js@1.0.0/dsp.min.js"></script>
 </head>
 <body>
   <header>
-    <h1>Emulator of SSTV</h1>
-    <p class="note">This is an audio-only SSTV encoder/decoder emulator. It does NOT transmit RF — use only for learning and offline testing.</p>
+    <h1>SSTV Web Emulator</h1>
+    <p class="note">Audio-only SSTV encoder/decoder emulator. Does not transmit RF.</p>
   </header>
   <main>
     <section class="controls">
       <div class="col">
         <h2>Encoder</h2>
-        <label>Image to send (PNG/JPEG): <input id="imgFile" type="file" accept="image/*"></label>
-  <label>Mode: <select id="modeSelect"><option>Scottie S1 (simulated)</option><option>Robot 36 (simulated)</option><option>Martin M1 (simulated)</option></select></label>
-        <label>Color mode: RGB (fixed)</label>
-  <label>Playback sample rate: <input id="sampleRate" type="number" value="44100"></label>
-  <label>Encode duration (seconds): <input id="encodeDuration" type="number" value="30" min="1" step="1"></label>
-        <label>Volume: <input id="volumeControl" type="range" min="0" max="1" step="0.01" value="1"></label>
+        <label>Upload image (PNG/JPEG): <input id="imgFile" type="file" accept="image/*"></label>
+        <canvas id="previewCanvas" width="320" height="256"></canvas>
         <div class="buttons">
-          <button id="encodeBtn">Encode & Play</button>
-          <button id="pauseBtn" disabled>Pause</button>
-          <button id="stopBtn" disabled>Stop</button>
+          <button id="encodeBtn">Encode</button>
+          <button id="playBtn" disabled>Play</button>
           <button id="downloadWavBtn" disabled>Download WAV</button>
         </div>
-        <label>Frequency scale min (Hz): <input id="freqMin" type="number" value="1500"></label>
-        <label>Frequency scale max (Hz): <input id="freqMax" type="number" value="2300"></label>
-        <canvas id="previewCanvas" width="320" height="256"></canvas>
-      </div>
-      <div class="col">
-        <h2>Live Decoder</h2>
-        <label><input id="liveDecodeToggle" type="checkbox"> Live decode while playing</label>
-        <div class="buttons">
-          <button id="startLiveDecodeBtn" disabled>Start Live Decode</button>
-          <button id="stopLiveDecodeBtn" disabled>Stop Live Decode</button>
-        </div>
-        <label>Live display width: <input id="liveDisplayWidth" type="number" value="640" min="64" max="2048"></label>
-        <label>Live display height: <input id="liveDisplayHeight" type="number" value="512" min="32" max="2048"></label>
-        <label><input id="autoToneDetect" type="checkbox" checked> Auto-detect tone length from audio buffer</label>
-        <canvas id="liveDecodedCanvas" width="320" height="256"></canvas>
       </div>
       <div class="col">
         <h2>Decoder</h2>
-        <label>Upload SSTV audio (WAV/MP3): <input id="audioFile" type="file" accept="audio/*"></label>
-  <label>Decode duration (seconds): <input id="decodeDuration" type="number" value="30" min="1" step="1"></label>
-        <label>Decode color mode: RGB (fixed)</label>
-  <label>Resolution (width px): <input id="resolutionSlider" type="range" min="32" max="512" value="320"></label>
-  <label>Detector: <select id="detectorSelect"><option value="goertzel">Goertzel (default)</option><option value="fft">FFT (fft.js)</option></select></label>
-  <label><input id="useDPR" type="checkbox"> Scale canvases by devicePixelRatio (high-DPI)</label>
-        <div class="buttons">
-          <button id="decodeBtn">Decode Uploaded</button>
-          <button id="micListenBtn">Use Microphone</button>
-          <button id="stopMicBtn" disabled>Stop Mic</button>
-        </div>
+        <label>Upload SSTV audio (WAV): <input id="audioFile" type="file" accept="audio/*"></label>
         <pre id="decodeDebug">Decoder debug: idle</pre>
         <canvas id="decodedCanvas" width="320" height="256"></canvas>
       </div>
     </section>
-    <section class="visuals">
-      <h2>Waveform / Spectrum</h2>
-      <canvas id="viz" width="640" height="128"></canvas>
-    </section>
   </main>
   <footer>
-    <p>Legal: This tool emulates SSTV audio only. It does not connect to radio hardware. Do not use to transmit on air unless you hold valid licenses and comply with local regulations.</p>
+    <p>This tool emulates SSTV audio only. Do not transmit on air without valid licenses.</p>
   </footer>
-<script src="static/app.js?v=20260317-05"></script>
+  <script src="static/app.js?v=20260317-06"></script>
 </body>
 </html>
