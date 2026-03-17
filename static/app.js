@@ -12,10 +12,10 @@ let playingSource = null;
 let playingStartTime = 0;
 let playingOffsetSeconds = 0;
 let playingPaused = false;
-const APP_BUILD = '2026-03-17-07';
+const APP_BUILD = '2026-03-17-08';
 const SAMPLE_RATE = 44100;
-const ENCODE_DURATION = 90;
-const MIN_TONE_MS = 3;
+const ENCODE_DURATION = 180;
+const MIN_TONE_MS = 5;
 
 function ensureAudioCtx(){
   if(!audioCtx){
